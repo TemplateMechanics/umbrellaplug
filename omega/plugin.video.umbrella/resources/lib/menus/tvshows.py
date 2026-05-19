@@ -2229,6 +2229,11 @@ class TVshows:
 
 	def tvshowDirectory(self, items, next=True, isProgress=False, isWatched=False, isCollection=False, folderName='Umbrella'):
 		from sys import argv # some functions like ActivateWindow() throw invalid handle less this is imported here.
+		# Defensive: callers pass folderName=folderName from upstream variables that can be None
+		# (e.g., TMDB-only shows with no IMDB id). Python's default-arg value only applies when
+		# the argument is omitted, not when None is passed explicitly — so quote_plus(folderName)
+		# downstream raises 'quote_from_bytes() expected bytes' on None.
+		if not folderName: folderName = 'Umbrella'
 		if self.useContainerTitles: control.setContainerName(folderName)
 		returnHome = control.folderPath()
 		control.setHomeWindowProperty('umbrella.returnhome', returnHome)
