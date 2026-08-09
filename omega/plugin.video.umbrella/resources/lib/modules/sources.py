@@ -30,6 +30,37 @@ single_expiry = timedelta(hours=6)
 season_expiry = timedelta(hours=48)
 show_expiry = timedelta(hours=48)
 video_extensions = supported_video_extensions()
+
+def _aegis_stream_ok(url, need_bytes=1500000, max_secs=5.0):
+	# [Aegis fork] Confirm a resolved link actually delivers a sustained stream
+	# before autoplay commits to it. Since debrid instant cache-checks went away, a
+	# source can 'resolve' (return a URL) yet not stream -- an uncached torrent the
+	# debrid hasn't really cached, or a dead host -- and Kodi then sits on a black
+	# screen with 'stream stalled'. Require ~1.5 MB within ~5s (>~2.4 Mbps); a link
+	# that can't sustain that is one that would stall, so autoplay skips it. Errs
+	# open (returns True) if it can't probe, so it never blocks a playable source.
+	try:
+		import requests
+	except Exception:
+		return True
+	if not isinstance(url, str) or not url.lower().startswith(('http://', 'https://')):
+		return True
+	try:
+		headers = {'User-Agent': 'Kodi', 'Range': 'bytes=0-'}
+		with requests.get(url, stream=True, timeout=(6, 6), headers=headers) as r:
+			if r.status_code not in (200, 206):
+				return False
+			total = 0
+			start = time()
+			for chunk in r.iter_content(131072):
+				total += len(chunk)
+				if total >= need_bytes:
+					return True
+				if time() - start > max_secs:
+					return False
+			return total >= need_bytes
+	except Exception:
+		return False
 internal_scrapers_clouds_list = [('realdebrid', 'rd_cloud', 'rd'), ('premiumize', 'pm_cloud', 'pm'), ('alldebrid', 'ad_cloud', 'ad'),('torbox', 'tb_cloud', 'tb'),('offcloud', 'oc_cloud', 'oc')]
 
 class Sources:
@@ -255,7 +286,44 @@ class Sources:
 				if select == '0':
 					control.sleep(200)
 					return self.sourceSelect(title, items, uncached_items, self.meta)
-				else: url = self.sourcesAutoPlay(items)
+				else:
+					url = self.sourcesAutoPlay(items)
+					# [Aegis fork] sourcesAutoPlay resolves each source synchronously with no per-
+					# source timeout, so it dead-ends on titles whose top sources don't instantly
+					# resolve -- the norm since debrid instant cache-checks went away and every
+					# torrent reports UNCHECKED, yet a manual source-select of the same list plays.
+					# When autoplay comes up empty, do a BOUNDED auto-select: tear down its progress
+					# window, then resolve the top few sources (already quality-sorted and capped to
+					# the link speed by our dynamic Max Quality) with the same threaded resolve +
+					# timeout the manual resolver uses, and play the first that resolves -- the best
+					# quality the network can actually stream, one tap. Bounded to a handful so a
+					# title with nothing cached can't grind the whole 40-source list (minutes of
+					# spin = looks frozen). If none of the top few resolve, drop to the source list.
+					if url == 'close://' or url is None:
+						homeWindow.clearProperty('umbrella.window_keep_alive')
+						try: self.window.close()
+						except: pass
+						for _aegis_item in items[:5]:
+							try:
+								if control.monitor.abortRequested(): return sysexit()
+								self.url = None
+								_aegis_w = Thread(target=self.sourcesResolve, args=(_aegis_item,))
+								_aegis_w.start()
+								for _ in range(40):
+									if not _aegis_w.is_alive(): break
+									if control.monitor.abortRequested(): return sysexit()
+									control.sleep(200)
+								if not self.url: continue
+								if not any(x in self.url.lower() for x in video_extensions) and 'plex.direct:' not in self.url and 'torbox' not in self.url and 'tb-cdn' not in self.url and 'plugin://plugin.video.composite_for_plex' not in self.url:
+									continue
+								if not _aegis_stream_ok(self.url):
+									continue
+								from resources.lib.modules import player
+								player.Player().play_source(self.title, self.year, self.season, self.episode, self.imdb, self.tmdb, self.tvdb, self.url, self.meta)
+								return self.url
+							except: log_utils.error()
+						control.sleep(200)
+						return self.sourceSelect(title, items, uncached_items, self.meta)
 			if url == 'close://' or url is None:
 				self.url = url
 				return self.errorForSources()
