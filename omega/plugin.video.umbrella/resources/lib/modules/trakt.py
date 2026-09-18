@@ -218,6 +218,15 @@ def re_auth(headers):
 	global _reauth_failed
 	if _reauth_failed:
 		return False
+	# Aegis fork: nothing to refresh when Trakt was never linked (or was unlinked).
+	# Posting an empty refresh_token returns 400 invalid_grant, which the branch
+	# below reports to the user as 'Please re-authorize your Trakt account' --
+	# a toast for an account they never had.
+	if not getSetting('trakt.refreshtoken'):
+		log_utils.log('TRAKT: no refresh token stored; skipping re-auth', level=log_utils.LOGDEBUG)
+		# No _reauth_failed latch: the service process is long-lived, and a user
+		# who links Trakt later must still get token refreshes.
+		return False
 
 	expired_token = headers.get('Authorization', '').replace('Bearer ', '').strip()
 	with _reauth_lock:

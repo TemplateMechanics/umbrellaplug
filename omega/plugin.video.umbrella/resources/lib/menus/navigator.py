@@ -117,15 +117,18 @@ class Navigator:
 			self.addDirectoryItem(40330 if self.indexLabels else 32442, 'movies&url=tmdbrecentday&folderName=%s' % quote_plus(getLS(40330 if self.indexLabels else 32442)), 'tmdb.png' if self.iconLogos else 'trending.png', 'DefaultTVShows.png')
 		if getMenuEnabled('navi.movie.tmdb.trendingweek'):
 			self.addDirectoryItem(40331 if self.indexLabels else 32442, 'movies&url=tmdbrecentweek&folderName=%s' % quote_plus(getLS(40331 if self.indexLabels else 32442)), 'tmdb.png' if self.iconLogos else 'trending.png', 'DefaultTVShows.png')
-		if getMenuEnabled('navi.movie.trakt.recommended'):
+		# Aegis fork: these read /recommendations or /users/me/history, which need a
+		# Trakt login. Unlinked, they listed empty and fired a re-auth with no refresh
+		# token (400 invalid_grant + a 'Please re-authorize' toast), so hide them.
+		if self.traktCredentials and getMenuEnabled('navi.movie.trakt.recommended'):
 			self.addDirectoryItem(32445 if self.indexLabels else 32444, 'movies&url=traktrecommendations&folderName=%s' % quote_plus(getLS(32445 if self.indexLabels else 32444)), 'trakt.png' if self.iconLogos else 'highly-rated.png', 'DefaultMovies.png')
 		if self.hasLibMovies and getMenuEnabled('navi.movie.lib.similar'):
 			self.addDirectoryItem(40392 if self.indexLabels else 40392, 'moviesimilarFromLibrary&folderName=%s' % quote_plus(getLS(40392 if self.indexLabels else 40392)), 'most-popular.png' if self.iconLogos else 'most-popular.png', 'DefaultMovies.png')
 		if self.hasLibMovies and getMenuEnabled('navi.movie.lib.recommended'):	
 			self.addDirectoryItem(40393 if self.indexLabels else 40393, 'movierecommendedFromLibrary&folderName=%s' % quote_plus(getLS(40393 if self.indexLabels else 40393)), 'featured.png' if self.iconLogos else 'featured.png', 'DefaultMovies.png')
-		if getMenuEnabled('navi.movie.trakt.recentlywatched'):
+		if self.traktCredentials and getMenuEnabled('navi.movie.trakt.recentlywatched'):
 			self.addDirectoryItem(40255 if self.indexLabels else 40256, 'movies&url=traktbasedonrecent&folderName=%s' % quote_plus(getLS(40255 if self.indexLabels else 40256)), 'trakt.png' if self.iconLogos else 'years.png', 'DefaultMovies.png')
-		if getMenuEnabled('navi.movie.trakt.traktsimilar'):
+		if self.traktCredentials and getMenuEnabled('navi.movie.trakt.traktsimilar'):
 			self.addDirectoryItem(40260 if self.indexLabels else 40261, 'movies&url=traktbasedonsimilar&folderName=%s' % quote_plus(getLS(40260 if self.indexLabels else 40261)), 'trakt.png' if self.iconLogos else 'years.png', 'DefaultMovies.png')
 		#if getMenuEnabled('navi.movie.imdb.featured'):
 		#	self.addDirectoryItem(32447 if self.indexLabels else 32446, 'movies&url=featured&folderName=%s' % quote_plus(getLS(32447 if self.indexLabels else 32446)), 'imdb.png' if self.iconLogos else 'movies.png', 'movies.png')
@@ -228,11 +231,11 @@ class Navigator:
 			self.addDirectoryItem(40331 if self.indexLabels else 32442, 'tvshows&url=tmdbrecentweek&folderName=%s' % quote_plus(getLS(40331 if self.indexLabels else 324425)), 'tmdb.png' if self.iconLogos else 'trending.png', 'DefaultTVShows.png')
 		#if getMenuEnabled('navi.tv.imdb.highlyrated'):
 		#	self.addDirectoryItem(32449 if self.indexLabels else 32448, 'tvshows&url=rating&folderName=%s' % quote_plus(getLS(32449 if self.indexLabels else 32448)), 'imdb.png' if self.iconLogos else 'highly-rated.png', 'DefaultTVShows.png')
-		if getMenuEnabled('navi.tv.trakt.recommended'):
+		if self.traktCredentials and getMenuEnabled('navi.tv.trakt.recommended'):
 			self.addDirectoryItem(32445 if self.indexLabels else 32444, 'tvshows&url=traktrecommendations&folderName=%s' % quote_plus(getLS(32445 if self.indexLabels else 32444)), 'trakt.png' if self.iconLogos else 'highly-rated.png', 'DefaultTVShows.png', queue=True)
-		if getMenuEnabled('navi.tv.trakt.recentlywatched'):
+		if self.traktCredentials and getMenuEnabled('navi.tv.trakt.recentlywatched'):
 			self.addDirectoryItem(40255 if self.indexLabels else 40256, 'tvshows&url=traktbasedonrecent&folderName=%s' % quote_plus(getLS(40255 if self.indexLabels else 40256)), 'trakt.png' if self.iconLogos else 'years.png', 'DefaultTVShows.png')
-		if getMenuEnabled('navi.tv.trakt.traktsimilar'):
+		if self.traktCredentials and getMenuEnabled('navi.tv.trakt.traktsimilar'):
 			self.addDirectoryItem(40260 if self.indexLabels else 40261, 'tvshows&url=traktbasedonsimilar&folderName=%s' % quote_plus(getLS(40260 if self.indexLabels else 40261)), 'trakt.png' if self.iconLogos else 'years.png', 'DefaultMovies.png')
 		if getMenuEnabled('navi.tv.tmdb.genres'):
 			self.addDirectoryItem(32486 if self.indexLabels else 32455, 'tvGenres&url=tmdb_genre&folderName=%s' % quote_plus(getLS(32486 if self.indexLabels else 32455)), 'tmdb.png' if self.iconLogos else 'genres.png', 'DefaultGenre.png')

@@ -31,6 +31,20 @@ season_expiry = timedelta(hours=48)
 show_expiry = timedelta(hours=48)
 video_extensions = supported_video_extensions()
 
+# Aegis fork: H.266/VVC releases are unplayable on Kodi 21 -- its FFmpeg 6.x has
+# no VVC decoder, so the video track is dropped ("Unsupported stream 0. Stream
+# disabled." / "ParsePacket - can't find decoder") and the user gets a black
+# screen with sound. The byte probe and the stall watchdog both pass it (bytes
+# flow, the clock advances), so it has to be filtered by name. Seen 2026-09-18:
+# autoplay picked "Oppenheimer...2160p...VVenC.H266.VVC" as the top source.
+# Unconditional rather than a setting: no Aegis target can decode it.
+_AEGIS_VVC_RE = re.compile(r'(?<![a-z0-9])(?:h\.?266|x266|vvc|vvenc)(?![a-z0-9])', re.I)
+
+
+def _aegis_is_vvc(source):
+	return bool(_AEGIS_VVC_RE.search(' '.join(str(source.get(k) or '') for k in ('name', 'name_info', 'url'))))
+
+
 def _aegis_stream_ok(url, need_bytes=1500000, max_secs=5.0):
 	# [Aegis fork] Confirm a resolved link actually delivers a sustained stream
 	# before autoplay commits to it. Since debrid instant cache-checks went away, a
@@ -61,7 +75,74 @@ def _aegis_stream_ok(url, need_bytes=1500000, max_secs=5.0):
 			return total >= need_bytes
 	except Exception:
 		return False
-internal_scrapers_clouds_list = [('realdebrid', 'rd_cloud', 'rd'), ('premiumize', 'pm_cloud', 'pm'), ('alldebrid', 'ad_cloud', 'ad'),('torbox', 'tb_cloud', 'tb'),('offcloud', 'oc_cloud', 'oc')]
+
+def _aegis_watchdog(stall, start_timeout=30.0, stall_secs=10.0, min_rate=0.7, healthy_window=40.0):
+	# [Aegis fork] Post-play stall-watchdog: runs in a thread alongside play_source
+	# (which blocks in keepAlive). Flags stall['v'] + stops the player if the fresh
+	# autoplay is unhealthy, so the bounded loop skips to the next source. Unhealthy =
+	#   - never starts within start_timeout,
+	#   - HARD stall: getTime frozen >= stall_secs,
+	#   - CHRONIC buffer: the playback clock falls behind wall time (advances < min_rate
+	#     of real seconds) -- catches bad-rip / underseeded sources that "play" but
+	#     stutter-buffer to a crawl. getTime keeps creeping forward on those so a
+	#     stuck-only check misses them (The Ring streamed ~63% of real time). Also
+	#     implicitly lands on the quality the link can actually sustain.
+	# Paused playback resets the baseline (not counted). Holds >= min_rate through
+	# healthy_window -> healthy, exits, lets keepAlive run normally.
+	try:
+		import xbmc
+	except Exception:
+		return
+	mon = xbmc.Monitor(); pl = xbmc.Player()
+	waited = 0.0
+	while waited < start_timeout:
+		if mon.abortRequested(): return
+		try:
+			if pl.isPlayingVideo(): break
+		except Exception: pass
+		mon.waitForAbort(0.25); waited += 0.25
+	else:
+		stall['v'] = True
+		try: pl.stop()
+		except Exception: pass
+		return
+	# let startup buffering settle before measuring sustained rate
+	settle = 0.0
+	while settle < 6.0:
+		if mon.abortRequested(): return
+		try:
+			if not pl.isPlayingVideo(): return
+		except Exception: return
+		mon.waitForAbort(0.5); settle += 0.5
+	try: base_t = pl.getTime()
+	except Exception: base_t = 0.0
+	base_real = 0.0; last_t = base_t; stuck = 0.0
+	while base_real < healthy_window:
+		if mon.abortRequested(): return
+		try:
+			if not pl.isPlayingVideo(): return
+			cur = pl.getTime()
+		except Exception:
+			return
+		if xbmc.getCondVisibility('Player.Paused'):
+			base_t = cur; base_real = 0.0; last_t = cur; stuck = 0.0
+			mon.waitForAbort(0.5); continue
+		if cur > last_t + 0.10:
+			stuck = 0.0; last_t = cur
+		else:
+			stuck += 0.5
+		if stuck >= stall_secs:
+			stall['v'] = True
+			try: pl.stop()
+			except Exception: pass
+			return
+		if base_real >= 15.0 and (cur - base_t) < min_rate * base_real:
+			stall['v'] = True
+			try: pl.stop()
+			except Exception: pass
+			return
+		base_real += 0.5
+		mon.waitForAbort(0.5)
 
 class Sources:
 	def __init__(self, all_providers=False, custom_query=False, filterless_scrape=False, rescrapeAll=False):
@@ -252,6 +333,10 @@ class Sources:
 				self.total_seasons, self.season_isAiring = self.get_season_info(imdb, tmdb, tvdb, meta, season)
 			if rescrape: self.clr_item_providers(title, year, imdb, tmdb, tvdb, season, episode, tvshowtitle, premiered)
 			items = providerscache.get(self.getSources, self.providercache_hours, title, year, imdb, tmdb, tvdb, season, episode, tvshowtitle, premiered)
+			# [Aegis fork] Re-apply the VVC filter here: providerscache serves the list
+			# sourcesFilter produced up to providercache_hours ago, so titles scraped before
+			# the filter existed kept autoplaying the undecodable VVC file (seen 2026-09-18).
+			if items: items = [i for i in items if not _aegis_is_vvc(i)]
 			if not items:
 				self.url = url
 				return self.errorForSources(title, year, imdb, tmdb, tvdb, season, episode, tvshowtitle, premiered)
@@ -303,6 +388,7 @@ class Sources:
 						homeWindow.clearProperty('umbrella.window_keep_alive')
 						try: self.window.close()
 						except: pass
+						_aegis_resolved_once = False
 						for _aegis_item in items[:5]:
 							try:
 								if control.monitor.abortRequested(): return sysexit()
@@ -319,7 +405,18 @@ class Sources:
 								if not _aegis_stream_ok(self.url):
 									continue
 								from resources.lib.modules import player
-								player.Player().play_source(self.title, self.year, self.season, self.episode, self.imdb, self.tmdb, self.tvdb, self.url, self.meta)
+								_aegis_stall = {'v': False}
+								_aegis_wd = Thread(target=_aegis_watchdog, args=(_aegis_stall,))
+								_aegis_wd.start()
+								_aegis_direct = _aegis_resolved_once
+								_aegis_resolved_once = True
+								player.Player().play_source(self.title, self.year, self.season, self.episode, self.imdb, self.tmdb, self.tvdb, self.url, self.meta, debridPackCall=_aegis_direct)
+								try: _aegis_wd.join(2)
+								except Exception: pass
+								if _aegis_stall['v']:
+									# stalled early -> stop happened in watchdog; try the next source
+									control.sleep(500)
+									continue
 								return self.url
 							except: log_utils.error()
 						control.sleep(200)
@@ -1118,6 +1215,7 @@ class Sources:
 				else: info_string = getFileType(url=i.get('url'))
 				i.update({'info': (i.get('info') + ' /' + info_string).lstrip(' ').lstrip('/').rstrip('/')})
 			except: log_utils.error()
+		self.sources = [i for i in self.sources if not _aegis_is_vvc(i)]
 		if getSetting('remove.hevc') == 'true':
 			self.sources = [i for i in self.sources if 'HEVC' not in i.get('info', '')]
 		if getSetting('remove.av1') == 'true':

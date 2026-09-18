@@ -5,6 +5,7 @@
 """
 
 import datetime
+import threading
 import time
 from sqlite3 import dbapi2 as db
 from resources.lib.modules.control import watchedcacheFile
@@ -12,25 +13,37 @@ from resources.lib.modules.control import watchedcacheFile
 
 
 class WatchedCache:
+	# Aegis fork: one SQLite connection PER THREAD. The module-level singleton
+	# below is built on whichever thread first imports this module, and sqlite3
+	# refuses to use a connection from any other thread. Playback marks watched
+	# from the player's worker threads, so every insert() there raised
+	# "ProgrammingError: SQLite objects created in a thread can only be used in
+	# that same thread" -- swallowed by log_utils.error(), so watched/resume
+	# state was silently dropped (20x in one local kodi.log, 2026-09-18).
+	# check_same_thread=False would silence the error but share one cursor
+	# across threads unsynchronised, so per-thread handles it is.
+	# No __del__: each thread's connection is closed when its thread-local
+	# storage is collected at thread exit.
 	def __init__(self):
-		self.__connect_database()
-		self.__set_PRAGMAS()
+		self._local = threading.local()
 		self.__create_cache_db()
 
-	def __connect_database(self):
-		self.dbcon = db.connect(watchedcacheFile, timeout=60, isolation_level=None)
-		self.dbcon.row_factory = db.Row # return results indexed by field names and not numbers so we can convert to dict
+	@property
+	def dbcon(self):
+		con = getattr(self._local, 'dbcon', None)
+		if con is None:
+			con = db.connect(watchedcacheFile, timeout=60, isolation_level=None)
+			con.row_factory = db.Row # return results indexed by field names and not numbers so we can convert to dict
+			cur = con.cursor()
+			cur.execute('''PRAGMA journal_mode = OFF''')
+			cur.execute('''PRAGMA synchronous = OFF''')
+			self._local.dbcon, self._local.dbcur = con, cur
+		return con
 
-	def __set_PRAGMAS(self):
-		self.dbcur = self.dbcon.cursor()
-		self.dbcur.execute('''PRAGMA journal_mode = OFF''')
-		self.dbcur.execute('''PRAGMA synchronous = OFF''')
-
-	def __del__(self):
-		try:
-			self.dbcur.close()
-			self.dbcon.close()
-		except: pass
+	@property
+	def dbcur(self):
+		self.dbcon  # ensures this thread's connection + cursor exist
+		return self._local.dbcur
 
 	def __create_cache_db(self):
 		# Create Watched table
